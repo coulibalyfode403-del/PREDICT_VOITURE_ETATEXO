@@ -1,10 +1,11 @@
 import streamlit as st
 import joblib
 import pandas as pd
+import numpy as np
 
 st.title("🚗 Application de Prédiction - État du Véhicule")
 
-# Chargement des fichiers joblib
+# Chargement des fichiers joblib avec mise en cache
 @st.cache_resource
 def load_assets():
     model = joblib.load("gb_model.joblib")
@@ -17,26 +18,44 @@ model, scaler, encoders, uniques = load_assets()
 
 st.subheader("Entrez les données du véhicule :")
 
-# Formulaire automatique selon le contenu de uniques.joblib
+# Ordre exact des variables catégorielles sauvegardées dans uniques.joblib
+# Dans votre notebook : uniques = [Marque, Transmission, Quartier, Etat] (cat_data)
+# On exclut la variable cible 'Etat' (index 3) pour l'entrée utilisateur
+cat_cols = ['Marque', 'Transmission', 'Quartier']
+
 input_data = {}
-for col, values in uniques.items():
-    if isinstance(values, (list, tuple, pd.Series, set)):
-        input_data[col] = st.selectbox(f"{col}", list(values))
-    else:
-        input_data[col] = st.number_input(f"{col}", value=0.0)
+
+# 1. Sélection pour les variables catégorielles (depuis uniques.joblib)
+for idx, col in enumerate(cat_cols):
+    input_data[col] = st.selectbox(f"Sélectionnez {col}", uniques[idx])
+
+# 2. Saisie pour les variables numériques
+input_data['Année'] = st.number_input("Année du véhicule", min_value=1990, max_value=2026, value=2015)
+input_data['Prix'] = st.number_input("Prix du véhicule (FCFA)", min_value=0, value=5000000, step=100000)
 
 # Prédiction
 if st.button("Prédire"):
-    df = pd.DataFrame([input_data])
-    
-    # Application des encodeurs
-    if isinstance(encoders, dict):
-        for col, enc in encoders.items():
-            if col in df.columns and hasattr(enc, "transform"):
-                df[col] = enc.transform(df[col])
-                
-    # Normalisation et prédiction
-    df_scaled = scaler.transform(df)
+    # Création du DataFrame dans l'ordre exact d'entraînement : ['Marque', 'Année', 'Transmission', 'Prix', 'Quartier']
+    df_input = pd.DataFrame([{
+        'Marque': input_data['Marque'],
+        'Année': input_data['Année'],
+        'Transmission': input_data['Transmission'],
+        'Prix': input_data['Prix'],
+        'Quartier': input_data['Quartier']
+    }])
+
+    # 1. Transformation des variables catégorielles avec les LabelEncoders
+    # Dans votre notebook : encoders = [encoder_Marque, encoder_Transmission, encoder_Quartier, encoder_Etat]
+    for idx, col in enumerate(cat_cols):
+        df_input[col] = encoders[idx].transform(df_input[col])
+
+    # 2. Normalisation avec le Scaler
+    df_scaled = scaler.transform(df_input)
+
+    # 3. Prédiction
     prediction = model.predict(df_scaled)
     
-    st.success(f"Résultat : **{prediction[0]}**")
+    # Décoder la prédiction (0 = D'occasion, 1 = Venant)
+    label_etat = encoders[3].inverse_transform(prediction)[0]
+
+    st.success(f"Résultat de la prédiction : **{label_etat}**")
